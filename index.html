@@ -143,6 +143,9 @@ textarea{resize:vertical;min-height:52px;flex:1 1 280px}
       <button type="button" id="ksave" class="ghost">저장</button>
       <button type="button" id="kdel" class="ghost">지우기</button>
     </div>
+    <p style="margin:12px 0 4px"><b>고유명사</b> · 번역하지 않고 이름으로 쓰는 말이에요. 한 줄에 하나씩 <span class="k">한국어=영어 표기=일본어 표기</span></p>
+    <textarea id="names" rows="5" spellcheck="false" style="width:100%;box-sizing:border-box;font:inherit;padding:8px;border-radius:10px;border:1px solid #ccc"></textarea>
+    <div class="keyrow"><button type="button" id="nsave">이름 저장</button><button type="button" id="nreset" class="ghost">처음대로</button></div>
     <p class="k" style="margin:0 0 14px">무료 등급은 하루 사용량에 제한이 있고, 입력한 내용을 구글이 서비스 개선에 쓸 수 있어요. 개인정보는 넣지 마세요.</p>
   </details>
 </div>
@@ -372,7 +375,14 @@ function errText(e){
 
 // ---------- 키 없이 쓰는 번역 (구글 번역 + 무료 AI) ----------
 const GT={en:"en",zh:"zh-CN",ja:"ja"};
+// ---------- 고유명사 (번역하지 않는 이름) ----------
+const DEF_NAMES="할뱅구=Halbaenggu=ハルベング\n할맹구=Halmaenggu=ハルメング\n할방탱구=Halbangtaenggu=ハルバンテング\n할망탱구=Halmangtaenggu=ハルマンテング\n할뱅이=Halbaengi=ハルベンイ\n할맹이=Halmaengi=ハルメンイ\n뀨우=Kkyuu=キュウ\n뀨=Kkyu=キュ";
+let namesTxt=store.get("tri.names",DEF_NAMES);
+function names(){return namesTxt.split(/\n+/).map(l=>l.split("=").map(x=>x.trim())).filter(x=>x[0]).map(([ko,en,ja])=>({ko,en:en||ko,ja:ja||en||ko})).sort((a,b)=>b.ko.length-a.ko.length)}
+function namesIn(q){const n=names();const hit=[];let t=q;for(const x of n){if(t.includes(x.ko)){hit.push(x);t=t.split(x.ko).join(" ")}}return hit}
+function namesRule(q){const h=namesIn(q);if(!h.length)return "";return `\n고유명사(사람·애칭 이름. 뜻으로 번역하지 말고 이름으로 쓰세요. 단어·숙어 칸에도 넣지 마세요): ${h.map(x=>`${x.ko} → 영어·중국어 "${x.en}", 일본어 "${x.ja}"`).join(", ")}`}
 async function gt(q,tl){
+  const nm=namesIn(q);for(const x of nm)q=q.split(x.ko).join(" "+x.en+" ");q=q.replace(/\s+/g," ").trim();
   const u=`https://translate.googleapis.com/translate_a/single?client=gtx&sl=ko&tl=${tl}&dt=t&dt=rm&dt=at&q=${encodeURIComponent(q)}`;
   const res=await fetch(u);if(!res.ok)throw{code:"other",message:"번역 서버 응답 "+res.status};
   const d=await res.json();
@@ -381,12 +391,14 @@ async function gt(q,tl){
   const rmRow=(d[0]||[]).find(x=>x&&x[0]==null&&x[2]);
   const r=rmRow?String(rmRow[2]).trim():"";
   const alts=[];for(const a of (d[5]||[]))for(const b of (a&&a[2])||[])if(b&&b[0])alts.push(b[0].trim());
-  return {t,r,alts:[...new Set(alts)].filter(x=>x&&x!==t)};
+  const fix=z=>{for(const x of nm)z=z.split(x.en).join(tl==="ja"?x.ja:x.en);return z};
+  return {t:fix(t),r:nm.length&&tl==="ja"?"":r,alts:[...new Set(alts.map(fix))].filter(x=>x&&x!==fix(t))};
 }
 const PART=/(으로|에서|에게|한테|까지|부터|이랑|하고|은|는|이|가|을|를|에|도|만|의|요)$/;
 function koWords(q){
   const w=q.replace(/[?!.~,…]/g," ").split(/\s+/).map(x=>x.length>2?x.replace(PART,""):x).filter(x=>x.length>=2);
-  return [...new Set(w)].slice(0,4);
+  const nk=names().map(x=>x.ko);
+  return [...new Set(w)].filter(x=>!nk.some(n=>x.includes(n))).slice(0,4);
 }
 async function freeTable(q){
   const ws0=koWords(q);const ws=ws0.length>=2?ws0:[];
@@ -447,7 +459,7 @@ const SCHEMA=`{"q":"원문","meaning":"원문을 띄어쓰기·생략 없이 풀
 L = {"use":[I],"casual":[I],"words":[I],"idioms":[I],"notes":["문장"]}
 I = {"t":"표현","r":"읽기","k":"한국어 뜻·설명"}`;
 function genPrompt(q,base){const anc=base?`\n참고용 기계 번역(틀릴 수 있어요. 뜻이 다르면 무시하세요): 영어 "${base.en}", 중국어 "${base.zh}", 일본어 "${base.ja}"\n먼저 한국어 문장의 뜻(누가 무엇을 하는 상황인지)을 정확히 파악하고, 그 뜻 그대로 옮기세요. 띄어쓰기가 없거나 틀려도 한국 사람이 읽는 가장 자연스러운 뜻으로 읽으세요(예: "다시켜야해"는 "다시 켜야 해", 즉 전원을 다시 켜야 한다는 뜻).`:"";return `당신은 한국어 화자에게 영어, 중국어(간체), 일본어를 가르치는 선생님입니다.
-한국어 문장: "${q}"${anc}
+한국어 문장: "${q}"${anc}${namesRule(q)}
 먼저 이 말이 어떤 상황에서 누가 하는 말인지 해석하세요. 입력은 띄어쓰기가 없거나 끝이 생략된 구어·혼잣말일 수 있어요. 예: "재채기나" → "재채기가 나(올 것 같아)", "다시켜야해" → "(전원을) 다시 켜야 해", "일찍나갔나" → "(그 사람) 일찍 나갔나?".
 해석한 그 말을 각 언어로 일상에서 실제로 어떻게 말하는지 정리해 JSON만 출력하세요.
 형식:
@@ -464,7 +476,7 @@ const valid=d=>d&&LANGS.every(([c])=>d[c]&&typeof d[c]==="object"&&(d[c].use||[]
 let seq=0;
 async function lookup(q){
   q=q.trim();if(!q)return;
-  const hit=cache[norm(q)];
+  const hit=namesIn(q).length&&cache[norm(q)]&&cache[norm(q)].nv!==namesTxt?null:cache[norm(q)];
   if(hit&&!hit.basic&&(LIB.includes(hit)||!key||hit.src==="gemini")){cur=hit;render();setStatus("");resetChat();return}
   const my=++seq;
   $("go").disabled=true;skeleton(q);
@@ -485,7 +497,7 @@ async function lookup(q){
     }
     if(!valid(d))throw{code:"other",message:"AI 답이 표 모양이 아니었어요."};
     if(my!==seq)return;
-    d.src=key?"gemini":"free";
+    d.src=key?"gemini":"free";d.nv=namesTxt;
     cur=d;saveCur(d,q);render();setStatus("");resetChat();
   }catch(e){
     if(my!==seq)return;
@@ -505,6 +517,7 @@ async function askQ(text){
   text=text.trim();if(!text)return;
   $("qq").value="";$("qgo").disabled=true;addMsg("me",text);const box=addMsg("ai","생각하는 중…");
   const ctx=JSON.stringify({문장:cur.q,영어:cur.en,중국어:cur.zh,일본어:cur.ja});
+  const nr=namesRule(text+" "+cur.q);
   const sys=`당신은 한국어 화자에게 영어·중국어·일본어를 가르치는 친절한 선생님입니다. 학습자가 지금 보고 있는 표현 표(JSON. 항목은 [표현, 읽기, 뜻] 또는 {t,r,k}, 일본어의 漢字[읽기]는 후리가나 표기):\n${ctx}\n규칙:
 - 학습자의 질문은 항상 영어·중국어·일본어 언어학습 질문으로 이해하세요. 일반 대화나 상담은 하지 마세요.
 - 질문 종류: (1) "이 말/상황을 어떻게 말해?" → 세 언어로 실제 하는 말. (2) 단어 차이·비교(예: "재채기와 기침이 한국어처럼 다르게 표현돼?") → 세 언어 각각 해당 단어들을 나란히 보여 주고 차이를 한 줄로. (3) 뉘앙스·존댓말·용법 질문 → 핵심만 짧게.
@@ -521,7 +534,7 @@ async function askQ(text){
 영어: sneeze(재채기) / cough(기침)
 중국어: 打喷嚏 dǎ pēntì(재채기) / 咳嗽 késou(기침)
 일본어: くしゃみ(재채기) / 咳[せき](기침)
-팁: 세 언어 모두 한국어처럼 두 단어를 따로 써요.`;
+팁: 세 언어 모두 한국어처럼 두 단어를 따로 써요.${nr}`;
   const contents=[...chat,{role:"user",parts:[{text}]}];
   if(key)contents[0]={role:"user",parts:[{text:sys+"\n\n질문: "+contents[0].parts[0].text}]};
   try{
@@ -586,6 +599,9 @@ $("rate").addEventListener("click",e=>{const b=e.target.closest("button");if(b)s
 function showKey(){$("kb").textContent=key?"키 저장됨":"키 없음";$("kb").className="badge"+(key?" ok":"");$("key").value=key?key.slice(0,6)+"…"+key.slice(-4):""}
 $("ksave").addEventListener("click",()=>{const v=$("key").value.trim();if(!v||v.includes("…")){toast("키를 붙여 넣어 주세요.");return}key=v;store.set("tri.key",key);showKey();toast("키를 저장했어요. 이제 새 문장과 질문을 쓸 수 있어요.")});
 $("kpaste").addEventListener("click",async()=>{try{const v=(await navigator.clipboard.readText()).trim();if(v.length<20||/\s/.test(v)){toast("복사한 내용이 키가 아닌 것 같아요. 키를 다시 복사해 주세요.");return}key=v;store.set("tri.key",key);showKey();toast("키를 저장했어요!")}catch(e){toast("붙여넣기가 막혔어요. 칸을 길게 눌러 붙여 넣고 저장을 눌러 주세요.")}});
+$("names").value=namesTxt;
+$("nsave").addEventListener("click",()=>{namesTxt=$("names").value.trim();store.set("tri.names",namesTxt);toast("이름을 저장했어요.")});
+$("nreset").addEventListener("click",()=>{namesTxt=DEF_NAMES;$("names").value=namesTxt;store.set("tri.names",namesTxt);toast("처음 이름 목록으로 돌렸어요.")});
 $("kdel").addEventListener("click",()=>{key="";store.set("tri.key","");showKey();toast("키를 지웠어요.")});
 $("key").addEventListener("focus",()=>{if($("key").value.includes("…"))$("key").value=""});
 
