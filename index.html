@@ -472,7 +472,7 @@ async function lookup(q){
     cur=d;saveCur(d,q);render();setStatus("");if(!basic)resetChat();
   }catch(e){
     if(my!==seq)return;
-    if(basic)setStatus("");else{render();setStatus(errText(e),true)}
+    if(basic)setStatus(key?"기본 번역만 보여 드려요. "+errText(e):"",!!key);else{render();setStatus(errText(e),true)}
   }finally{if(my===seq)$("go").disabled=false}
 }
 
