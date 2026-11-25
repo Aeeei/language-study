@@ -274,7 +274,7 @@ const LIB=[
 {
 const ROWS=[["use","실제로 쓰는 표현"],["casual","캐주얼한 표현"],["words","단어"],["idioms","숙어 · 관용어"],["notes","참고할 점"]];
 const LANGS=[["en","영어","English","en-US"],["zh","중국어","中文","zh-CN"],["ja","일본어","日本語","ja-JP"]];
-const MODELS=["gemini-2.5-flash","gemini-flash-latest","gemini-2.0-flash"];
+const MODELS=["gemini-3.5-flash","gemini-flash-latest","gemini-3-flash-preview","gemini-3.1-flash-lite","gemini-flash-lite-latest","gemini-2.5-flash","gemini-2.5-flash-lite"];
 const $=id=>document.getElementById(id);
 const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const ruby=s=>esc(s).replace(/([㐀-鿿々〆ヶ]+)\[([^\]\[]+)\]/g,"<ruby>$1<rt>$2</rt></ruby>");
@@ -301,7 +301,7 @@ function cell(lang,row,d){
 }
 function render(){
   $("qt").textContent=cur.q;
-  $("qs").textContent=(LIB.includes(cur)?"문장 모음":cur.basic?(cur.aiErr?(key?"기본 번역 (AI 표 실패)":"기본 번역"):"기본 번역 · AI 표 만드는 중…"):"AI가 만든 표")+(cur.meaning&&norm(cur.meaning)!==norm(cur.q)?" · 뜻: "+cur.meaning:"");
+  $("qs").textContent=(LIB.includes(cur)?"문장 모음":cur.basic?(cur.aiErr?(key?"기본 번역 (AI 표 실패)":"기본 번역"):(key?"기본 번역 (AI 표 실패)":"기본 번역")):"AI가 만든 표")+(cur.meaning&&norm(cur.meaning)!==norm(cur.q)?" · 뜻: "+cur.meaning:"");
   $("out").innerHTML=`<table><thead><tr><th></th>${LANGS.map(([c,ko,n])=>`<th class="${c}">${ko}<small>${n}</small></th>`).join("")}</tr></thead><tbody>${ROWS.filter(([r])=>LANGS.some(([c])=>((cur[c]||{})[r]||[]).length)).map(([r,lab])=>`<tr><th scope="row">${lab}</th>${LANGS.map(([c,ko])=>`<td class="${c}" data-l="${ko}">${cell(c,r,cur[c])}</td>`).join("")}</tr>`).join("")}</tbody></table>`;
   const recent=hist.slice(0,2);
   const recs=recOrder.map(d=>d.q).filter(q=>!recent.includes(q)).slice(0,3);
@@ -321,40 +321,48 @@ let toastT;function toast(t){const el=$("toast");el.textContent=t;el.hidden=fals
 const _I={type:"OBJECT",properties:{t:{type:"STRING"},r:{type:"STRING"},k:{type:"STRING"}},required:["t","r","k"]};
 const _L={type:"OBJECT",properties:{use:{type:"ARRAY",items:_I},casual:{type:"ARRAY",items:_I},words:{type:"ARRAY",items:_I},idioms:{type:"ARRAY",items:_I},notes:{type:"ARRAY",items:{type:"STRING"}}},required:["use","casual","words","idioms","notes"]};
 const TSCHEMA={type:"OBJECT",properties:{q:{type:"STRING"},meaning:{type:"STRING"},en:_L,zh:_L,ja:_L},required:["q","meaning","en","zh","ja"]};
+const lower=o=>JSON.parse(JSON.stringify(o).replace(/"type":"([A-Z]+)"/g,(m,t)=>`"type":"${t.toLowerCase()}"`));
+const JSCHEMA=lower(TSCHEMA);
 async function gemini(contents,json){
   if(!key)throw{code:"nokey"};
   let last;
-  const variants=json?[{think:true,schema:true},{think:false,schema:true},{think:false,schema:false}]:[{think:true},{think:false}];
-  for(const m of MODELS){
+  const good=store.get("tri.model","");
+  const order=good&&MODELS.includes(good)?[good,...MODELS.filter(m=>m!==good)]:MODELS;
+  for(const m of order){
+    const g3=!/2\.5/.test(m);
+    const think=g3?{thinkingLevel:"low"}:{thinkingBudget:0};
+    const variants=json
+      ?[{think,schema:g3?"json":"api"},{think,schema:g3?"api":"json"},{schema:"api"},{}]
+      :[{think},{}];
     for(const v of variants){
-      if(v.think&&!/2\.5/.test(m))continue;
       const gc=json?{responseMimeType:"application/json",temperature:0.4}:{temperature:0.6};
-      if(v.schema)gc.responseSchema=TSCHEMA;
-      if(v.think)gc.thinkingConfig={thinkingBudget:0};
+      if(v.schema==="api")gc.responseSchema=TSCHEMA;
+      if(v.schema==="json")gc.responseJsonSchema=JSCHEMA;
+      if(v.think)gc.thinkingConfig=v.think;
       const ctl=new AbortController();const tm=setTimeout(()=>ctl.abort(),40000);
       let res;
       try{res=await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${m}:generateContent`,{method:"POST",signal:ctl.signal,headers:{"Content-Type":"application/json","x-goog-api-key":key},body:JSON.stringify({contents,generationConfig:gc})})}
-      catch(e){clearTimeout(tm);last={code:"other",message:e.name==="AbortError"?"구글 AI가 40초 동안 답이 없어요.":"인터넷 연결을 확인해 주세요."};break}
+      catch(e){clearTimeout(tm);last={code:"other",message:e.name==="AbortError"?"구글 AI가 40초 동안 답이 없어요.":"인터넷 연결을 확인해 주세요."};if(e.name!=="AbortError")throw last;break}
       clearTimeout(tm);
       if(res.ok){
         const d=await res.json();
         const text=(d.candidates?.[0]?.content?.parts||[]).filter(p=>!p.thought).map(p=>p.text||"").join("");
-        if(text)return text;
+        if(text){if(good!==m)store.set("tri.model",m);return text}
         last={code:"other",message:"빈 답이 왔어요."};continue;
       }
       const t=await res.text();const msg=(t.match(/"message":\s*"([^"]+)/)||[])[1]||"";
-      if(res.status===429){last={code:"quota",message:msg};continue}
-      if(res.status===401||res.status===403||/API_KEY|ACCESS_TOKEN_TYPE/i.test(t))throw{code:"badkey",message:msg||("HTTP "+res.status)};
+      if(/API key not valid|API_KEY_INVALID|ACCESS_TOKEN_TYPE|API key expired/i.test(t))throw{code:"badkey",message:msg||("HTTP "+res.status)};
+      if(res.status===429){last={code:"quota",message:msg};break}   // 모델마다 한도가 따로라 다음 모델로
       last={code:"other",message:"구글 AI 응답 "+res.status+" "+msg};
-      if(res.status===400)continue; // 다른 설정으로 다시
-      break; // 404·5xx: 다음 모델
+      if(res.status===400)continue;   // 설정을 바꿔 다시
+      break;                          // 403·404·5xx: 다음 모델
     }
   }
   throw last||{code:"other",message:"알 수 없는 오류"};
 }
 function errText(e){
   const c=e&&e.code;
-  if(c==="nokey")return "AI 설정에 키가 필요해요.";
+  if(c==="nokey")return "자세한 표와 질문 답변은 맨 아래 'AI 설정'에 무료 키를 넣으면 돼요.";
   if(c==="busy")return "무료 AI가 지금 붐벼요. 30초쯤 뒤에 다시 해 보세요.";
   if(c==="quota")return "오늘 무료 사용량을 다 썼거나 너무 빨리 눌렀어요. 잠시 후 다시 해 보세요.";
   if(c==="badkey")return "구글이 이 키를 받아 주지 않았어요. ("+((e&&e.message)||"")+")";
@@ -424,6 +432,7 @@ function freeAI(messages,json,ms,onWait){
 }
 async function ai(contents,json,sysMsg,onWait){
   if(key)return gemini(contents,json);
+  throw{code:"nokey"};
   const messages=contents.map(m=>({role:m.role==="model"?"assistant":"user",content:m.parts.map(p=>p.text).join("")}));
   if(sysMsg)messages.unshift({role:"system",content:sysMsg});
   return freeAI(messages,json,0,onWait);
@@ -458,26 +467,34 @@ async function lookup(q){
   const hit=cache[norm(q)];
   if(hit&&!hit.basic&&(LIB.includes(hit)||!key||hit.src==="gemini")){cur=hit;render();setStatus("");resetChat();return}
   const my=++seq;
-  $("go").disabled=true;skeleton(q);setStatus("번역하고 있어요…");
+  $("go").disabled=true;skeleton(q);
+  const getBasic=async()=>{try{return await freeTable(q)}catch(e){return null}};
   let basic=null;
-  try{basic=await freeTable(q)}catch(e){}
-  if(my!==seq)return;
-  if(basic){basic.basic=true;cur=basic;saveCur(basic,q);render();resetChat();setStatus("기본 번역이에요. 캐주얼 표현·숙어까지 채우는 중…");$("go").disabled=false}
-  const base=basic&&{en:basic.en.use[0].t,zh:basic.zh.use[0].t,ja:basic.ja.use[0].t};
+  if(!key){ // 키 없음: 기본 번역 먼저 보여 주고 무료 AI는 시도만
+    setStatus("번역하고 있어요…");
+    basic=await getBasic();if(my!==seq)return;
+    if(basic){basic.basic=true;cur=basic;saveCur(basic,q);render();resetChat();$("go").disabled=false;setStatus("")}
+  }else setStatus("AI가 표를 만들고 있어요. 5~15초쯤 걸려요.");
   try{
-    const text=await ai([{role:"user",parts:[{text:genPrompt(q,base)}]}],true);
-    const m=text.match(/\{[\s\S]*\}/);const d=m&&JSON.parse(m[0]);
-    if(!valid(d))throw{message:"답을 표로 만들지 못했어요."};
+    const base=basic&&{en:basic.en.use[0].t,zh:basic.zh.use[0].t,ja:basic.ja.use[0].t};
+    let d=null;
+    for(let k=0;k<2&&!valid(d);k++){
+      const text=await ai([{role:"user",parts:[{text:genPrompt(q,base)}]}],true);
+      try{const m=text.match(/\{[\s\S]*\}/);d=m&&JSON.parse(m[0])}catch(_){d=null}
+      if(my!==seq)return;
+    }
+    if(!valid(d))throw{code:"other",message:"AI 답이 표 모양이 아니었어요."};
     if(my!==seq)return;
     d.src=key?"gemini":"free";
-    // 구글 번역을 '실제로 쓰는 표현' 맨 앞에 항상 넣어 뜻이 엇나가지 않게
-    if(basic)for(const [c] of LANGS){const g=basic[c].use[0];const u=(d[c].use||[]).map(it);
-      if(!u.length)d[c].use=[{t:g.t,r:g.r,k:"기본 번역"},...u].slice(0,3);
-      if(!(d[c].words||[]).length)d[c].words=basic[c].words;}
-    cur=d;saveCur(d,q);render();setStatus("");if(!basic)resetChat();
+    cur=d;saveCur(d,q);render();setStatus("");resetChat();
   }catch(e){
     if(my!==seq)return;
-    if(basic){basic.aiErr=true;render();setStatus(key?"AI 표를 못 받았어요: "+errText(e)+" 변환하기를 다시 누르면 다시 시도해요.":"",!!key)}else{render();setStatus(errText(e),true)}
+    if(key){ // AI 실패: 이유를 보여 주고 기본 번역으로 대신
+      basic=basic||await getBasic();if(my!==seq)return;
+      if(basic){basic.basic=true;basic.aiErr=true;cur=basic;render();resetChat()}else render();
+      setStatus("AI 표를 못 만들었어요: "+errText(e)+(basic?" 아래는 기본 번역이에요. 변환하기를 다시 누르면 다시 시도해요.":""),true);
+    }else if(!basic){render();setStatus(errText(e),true)}
+    else{basic.aiErr=true;render();setStatus("기본 번역이에요. "+errText(e))}
   }finally{if(my===seq)$("go").disabled=false}
 }
 
@@ -492,18 +509,18 @@ async function askQ(text){
 - 학습자의 질문은 항상 영어·중국어·일본어 언어학습 질문으로 이해하세요. 일반 대화나 상담은 하지 마세요.
 - 질문 종류: (1) "이 말/상황을 어떻게 말해?" → 세 언어로 실제 하는 말. (2) 단어 차이·비교(예: "재채기와 기침이 한국어처럼 다르게 표현돼?") → 세 언어 각각 해당 단어들을 나란히 보여 주고 차이를 한 줄로. (3) 뉘앙스·존댓말·용법 질문 → 핵심만 짧게.
 - 아주 짧게: 3~5줄 이내. 인사·서론·맺음말 없이 바로 답만.
-- 예문은 언어마다 한 줄씩 "영어: …", "중국어: … (병음)", "일본어: … (읽기)" 형식. 필요한 언어만 써도 돼요.
+- 예문은 언어마다 한 줄씩 "영어: …", "중국어: … (병음)", "일본어: … (히라가나 읽기, 로마자 금지)" 형식. 필요한 언어만 써도 돼요.
 - 설명은 한국어로 한 줄 이내. 마크다운 기호(#, **, -)는 쓰지 마세요.
 - 질문이 상황 설명이면(예: "누굴 찾는데 안 보여서 혼잣말로 '일찍 나갔나'") 그 상황에서 세 언어로 실제로 하는 말을 알려 주세요. 한국어 문법 설명은 하지 마세요.
 예시 답:
 영어: Did he leave early? (혼잣말이면 I guess he left early.)
 중국어: 他是不是早走了？ (tā shì bu shì zǎo zǒu le)
-일본어: もう帰[かえ]ったのかな。 (mō kaetta no kana)
+일본어: もう帰[かえ]ったのかな。 (もうかえったのかな)
 팁: 일본어 '~のかな'는 혼잣말로 궁금해할 때 딱 맞아요.
 비교 질문 예시 답("재채기와 기침이 다르게 표현돼?"):
 영어: sneeze(재채기) / cough(기침)
 중국어: 打喷嚏 dǎ pēntì(재채기) / 咳嗽 késou(기침)
-일본어: くしゃみ kushami(재채기) / 咳[せき] seki(기침)
+일본어: くしゃみ(재채기) / 咳[せき](기침)
 팁: 세 언어 모두 한국어처럼 두 단어를 따로 써요.`;
   const contents=[...chat,{role:"user",parts:[{text}]}];
   if(key)contents[0]={role:"user",parts:[{text:sys+"\n\n질문: "+contents[0].parts[0].text}]};
