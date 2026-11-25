@@ -7,6 +7,9 @@
 <title>뭐라고 하지이~</title>
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" href="icon.svg">
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#17181d">
+<link rel="apple-touch-icon" href="icon-192.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+KR:wght@400;600;700&family=Noto+Sans+JP:wght@400;600&family=Noto+Sans+SC:wght@400;600&display=swap" rel="stylesheet">
 <style>
@@ -280,7 +283,7 @@ const store={get(k,d){try{const v=localStorage.getItem(k);return v==null?d:JSON.
 
 // 항목 형식 통일: [t,r,k] 또는 {t,r,k}
 const it=x=>Array.isArray(x)?{t:x[0],r:x[1],k:x[2]}:(x||{});
-let cache=store.get("tri.cache",{});
+let cache=store.get("tri.cache2",{});
 for(const d of LIB)cache[norm(d.q)]=d;
 let hist=store.get("tri.hist",[]);
 let cur=LIB[0],chat=[],key=store.get("tri.key","");
@@ -365,7 +368,7 @@ async function freeTable(q){
 }
 // 무료 AI (키·로그인 없음). 안 되면 조용히 넘어가요.
 async function freeAI(messages,json,ms){
-  const ctl=new AbortController();const tm=setTimeout(()=>ctl.abort(),ms||45000);
+  const ctl=new AbortController();const tm=setTimeout(()=>ctl.abort(),ms||30000);
   try{
     const res=await fetch("https://text.pollinations.ai/openai",{method:"POST",headers:{"Content-Type":"application/json"},signal:ctl.signal,
       body:JSON.stringify({model:"openai",messages,...(json?{response_format:{type:"json_object"}}:{}),referrer:"language-study"})});
@@ -384,13 +387,13 @@ function saveCur(d,q){
   d.q=q;cache[norm(q)]=d;hist=[q,...hist.filter(x=>x!==q)].slice(0,10);
   const own={};for(const k in cache)if(!LIB.includes(cache[k]))own[k]=cache[k];
   const ks=Object.keys(own);while(ks.length>40)delete own[ks.shift()];
-  store.set("tri.cache",own);store.set("tri.hist",hist);
+  store.set("tri.cache2",own);store.set("tri.hist",hist);
 }
 const SCHEMA=`{"q":"원문","en":L,"zh":L,"ja":L}
 L = {"use":[I],"casual":[I],"words":[I],"idioms":[I],"notes":["문장"]}
 I = {"t":"표현","r":"읽기","k":"한국어 뜻·설명"}`;
-function genPrompt(q){return `당신은 한국어 화자에게 영어, 중국어(간체), 일본어를 가르치는 선생님입니다.
-한국어 문장: "${q}"
+function genPrompt(q,base){const anc=base?`\n참고용 기계 번역(틀릴 수 있어요. 뜻이 다르면 무시하세요): 영어 "${base.en}", 중국어 "${base.zh}", 일본어 "${base.ja}"\n먼저 한국어 문장의 뜻(누가 무엇을 하는 상황인지)을 정확히 파악하고, 그 뜻 그대로 옮기세요. 띄어쓰기가 없거나 틀려도 한국 사람이 읽는 가장 자연스러운 뜻으로 읽으세요(예: "다시켜야해"는 "다시 켜야 해", 즉 전원을 다시 켜야 한다는 뜻).`:"";return `당신은 한국어 화자에게 영어, 중국어(간체), 일본어를 가르치는 선생님입니다.
+한국어 문장: "${q}"${anc}
 이 문장을 각 언어로 일상에서 실제로 어떻게 말하는지 정리해 JSON만 출력하세요.
 형식:
 ${SCHEMA}
@@ -408,29 +411,24 @@ async function lookup(q){
   if(hit&&!hit.basic){cur=hit;render();setStatus("");resetChat();return}
   const my=++seq;
   $("go").disabled=true;skeleton(q);setStatus("번역하고 있어요…");
-  const richP=(async()=>{
-    const text=await ai([{role:"user",parts:[{text:genPrompt(q)}]}],true);
+  let basic=null;
+  try{basic=await freeTable(q)}catch(e){}
+  if(my!==seq)return;
+  if(basic){basic.basic=true;cur=basic;saveCur(basic,q);render();resetChat();setStatus("기본 번역이에요. 캐주얼 표현·숙어까지 채우는 중…");$("go").disabled=false}
+  const base=basic&&{en:basic.en.use[0].t,zh:basic.zh.use[0].t,ja:basic.ja.use[0].t};
+  try{
+    const text=await ai([{role:"user",parts:[{text:genPrompt(q,base)}]}],true);
     const m=text.match(/\{[\s\S]*\}/);const d=m&&JSON.parse(m[0]);
     if(!valid(d))throw{message:"답을 표로 만들지 못했어요."};
-    return d;
-  })();
-  let shown=false;
-  if(!key){
-    try{
-      const b=await freeTable(q);
-      if(my!==seq)return;
-      b.basic=true;cur=b;saveCur(b,q);render();resetChat();shown=true;
-      setStatus("기본 번역이에요. 캐주얼 표현·숙어까지 채우는 중…");
-      $("go").disabled=false;
-    }catch(e){}
-  }
-  try{
-    const d=await richP;if(my!==seq)return;
-    cur=d;saveCur(d,q);render();setStatus("");if(!shown)resetChat();
+    if(my!==seq)return;
+    // 구글 번역을 '실제로 쓰는 표현' 맨 앞에 항상 넣어 뜻이 엇나가지 않게
+    if(basic)for(const [c] of LANGS){const g=basic[c].use[0];const u=(d[c].use||[]).map(it);
+      if(!u.length)d[c].use=[{t:g.t,r:g.r,k:"기본 번역"},...u].slice(0,3);
+      if(!(d[c].words||[]).length)d[c].words=basic[c].words;}
+    cur=d;saveCur(d,q);render();setStatus("");if(!basic)resetChat();
   }catch(e){
     if(my!==seq)return;
-    if(shown)setStatus("");
-    else{render();setStatus(errText(e),true)}
+    if(basic)setStatus("");else{render();setStatus(errText(e),true)}
   }finally{if(my===seq)$("go").disabled=false}
 }
 
