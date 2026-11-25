@@ -378,9 +378,10 @@ async function freeAI(messages,json,ms){
     return t;
   }finally{clearTimeout(tm)}
 }
-async function ai(contents,json){
+async function ai(contents,json,sysMsg){
   if(key)return gemini(contents,json);
   const messages=contents.map(m=>({role:m.role==="model"?"assistant":"user",content:m.parts.map(p=>p.text).join("")}));
+  if(sysMsg)messages.unshift({role:"system",content:sysMsg});
   return freeAI(messages,json);
 }
 function saveCur(d,q){
@@ -439,11 +440,15 @@ async function askQ(text){
   text=text.trim();if(!text)return;
   $("qq").value="";$("qgo").disabled=true;addMsg("me",text);const box=addMsg("ai","생각하는 중…");
   const ctx=JSON.stringify({문장:cur.q,영어:cur.en,중국어:cur.zh,일본어:cur.ja});
-  const sys=`당신은 한국어 화자에게 영어·중국어·일본어를 가르치는 친절한 선생님입니다. 학습자가 지금 보고 있는 표현 표(JSON. 항목은 [표현, 읽기, 뜻] 또는 {t,r,k}, 일본어의 漢字[읽기]는 후리가나 표기):\n${ctx}\n규칙: 한국어로 답하세요. 짧고 구체적으로, 예문을 들 때는 중국어엔 병음, 일본어엔 괄호로 읽기를 붙이세요. 마크다운 기호(#, **)는 쓰지 마세요.`;
+  const sys=`당신은 한국어 화자에게 영어·중국어·일본어를 가르치는 친절한 선생님입니다. 학습자가 지금 보고 있는 표현 표(JSON. 항목은 [표현, 읽기, 뜻] 또는 {t,r,k}, 일본어의 漢字[읽기]는 후리가나 표기):\n${ctx}\n규칙:
+- 학습자의 질문은 항상 "위 표현을 영어·중국어·일본어로 어떻게 말하는지"에 대한 언어학습 질문으로 이해하세요. 잡담처럼 보여도 그 말을 세 언어로 어떻게 하는지, 또는 위 표현과 연결해서 답하세요. 일반 대화나 상담은 하지 마세요.
+- 아주 짧게: 3~5줄 이내. 인사·서론·맺음말 없이 바로 답만.
+- 예문은 언어마다 한 줄씩 "영어: …", "중국어: … (병음)", "일본어: … (읽기)" 형식. 필요한 언어만 써도 돼요.
+- 설명은 한국어로 한 줄 이내. 마크다운 기호(#, **, -)는 쓰지 마세요.`;
   const contents=[...chat,{role:"user",parts:[{text}]}];
-  contents[0]={role:"user",parts:[{text:sys+"\n\n질문: "+contents[0].parts[0].text}]};
+  if(key)contents[0]={role:"user",parts:[{text:sys+"\n\n질문: "+contents[0].parts[0].text}]};
   try{
-    const a=(await ai(contents,false)).replace(/\*\*/g,"").trim();
+    const a=(await ai(contents,false,key?null:sys)).replace(/\*\*/g,"").trim();
     box.textContent=a;
     const sb=document.createElement("button");sb.type="button";sb.className="say";sb.innerHTML=SPK+'<span class="lbl">답변 듣기</span>';
     sb.addEventListener("click",()=>speak(a,"ko-KR",sb));box.after(sb);
