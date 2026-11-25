@@ -100,6 +100,7 @@ textarea{resize:vertical;min-height:52px;flex:1 1 280px}
 .badge.ok{border-color:var(--en);color:var(--en)}
 .nokey{background:var(--soft);border-radius:12px;padding:12px 16px;font-size:15px;margin:12px 0}
 
+.qline{margin:4px 0;line-height:1.6}.qline .say{margin-left:6px;vertical-align:middle;padding:2px 10px;font-size:.85em}
 </style>
 </head>
 <body>
@@ -444,14 +445,30 @@ async function askQ(text){
 - 학습자의 질문은 항상 "위 표현을 영어·중국어·일본어로 어떻게 말하는지"에 대한 언어학습 질문으로 이해하세요. 잡담처럼 보여도 그 말을 세 언어로 어떻게 하는지, 또는 위 표현과 연결해서 답하세요. 일반 대화나 상담은 하지 마세요.
 - 아주 짧게: 3~5줄 이내. 인사·서론·맺음말 없이 바로 답만.
 - 예문은 언어마다 한 줄씩 "영어: …", "중국어: … (병음)", "일본어: … (읽기)" 형식. 필요한 언어만 써도 돼요.
-- 설명은 한국어로 한 줄 이내. 마크다운 기호(#, **, -)는 쓰지 마세요.`;
+- 설명은 한국어로 한 줄 이내. 마크다운 기호(#, **, -)는 쓰지 마세요.
+- 질문이 상황 설명이면(예: "누굴 찾는데 안 보여서 혼잣말로 '일찍 나갔나'") 그 상황에서 세 언어로 실제로 하는 말을 알려 주세요. 한국어 문법 설명은 하지 마세요.
+예시 답:
+영어: Did he leave early? (혼잣말이면 I guess he left early.)
+중국어: 他是不是早走了？ (tā shì bu shì zǎo zǒu le)
+일본어: もう帰[かえ]ったのかな。 (mō kaetta no kana)
+팁: 일본어 '~のかな'는 혼잣말로 궁금해할 때 딱 맞아요.`;
   const contents=[...chat,{role:"user",parts:[{text}]}];
   if(key)contents[0]={role:"user",parts:[{text:sys+"\n\n질문: "+contents[0].parts[0].text}]};
   try{
     const a=(await ai(contents,false,key?null:sys)).replace(/\*\*/g,"").trim();
-    box.textContent=a;
-    const sb=document.createElement("button");sb.type="button";sb.className="say";sb.innerHTML=SPK+'<span class="lbl">답변 듣기</span>';
-    sb.addEventListener("click",()=>speak(a,"ko-KR",sb));box.after(sb);
+    box.textContent="";
+    const LL={"영어":"en-US","중국어":"zh-CN","일본어":"ja-JP"};
+    for(const line of a.split(/\n+/).map(x=>x.trim()).filter(Boolean)){
+      const m=line.match(/^(영어|중국어|일본어)\s*[:：]\s*(.+)$/);
+      const row=document.createElement("div");row.className="qline";
+      if(m){
+        const body=m[2];const say=plain(body.replace(/\s*[(（][^)）]*[)）]\s*$/,""));
+        row.innerHTML=`<b>${m[1]}</b> ${ruby(body)} `;
+        const b=document.createElement("button");b.type="button";b.className="say";b.innerHTML=SPK+'<span class="lbl">듣기</span>';
+        b.addEventListener("click",()=>speak(say,LL[m[1]],b));row.appendChild(b);
+      }else row.textContent=line;
+      box.appendChild(row);
+    }
     chat.push({role:"user",parts:[{text}]},{role:"model",parts:[{text:a}]});
     if(chat.length>12)chat=chat.slice(-12);
   }catch(e){box.textContent=errText(e)}
