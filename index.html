@@ -288,6 +288,7 @@ const it=x=>Array.isArray(x)?{t:x[0],r:x[1],k:x[2]}:(x||{});
 let cache=store.get("tri.cache3",{});
 for(const d of LIB)cache[norm(d.q)]=d;
 let hist=store.get("tri.hist",[]);
+const recOrder=[...LIB].sort(()=>Math.random()-.5);
 let cur=LIB[0],chat=[],key=store.get("tri.key","");
 
 function cell(lang,row,d){
@@ -300,7 +301,11 @@ function render(){
   $("qt").textContent=cur.q;
   $("qs").textContent=(LIB.includes(cur)?"문장 모음":cur.basic?"기본 번역":"AI가 만든 표")+(cur.meaning&&norm(cur.meaning)!==norm(cur.q)?" · 뜻: "+cur.meaning:"");
   $("out").innerHTML=`<table><thead><tr><th></th>${LANGS.map(([c,ko,n])=>`<th class="${c}">${ko}<small>${n}</small></th>`).join("")}</tr></thead><tbody>${ROWS.map(([r,lab])=>`<tr><th scope="row">${lab}</th>${LANGS.map(([c,ko])=>`<td class="${c}" data-l="${ko}">${cell(c,r,cur[c])}</td>`).join("")}</tr>`).join("")}</tbody></table>`;
-  const list=[...new Set([...LIB.map(d=>d.q),...hist])];
+  const recent=hist.slice(0,2);
+  const recs=recOrder.map(d=>d.q).filter(q=>!recent.includes(q)).slice(0,3);
+  let list=[...new Set([...recs,...recent])];
+  if(cur&&cur.q&&!list.includes(cur.q))list.push(cur.q);
+  list=list.slice(0,7);
   $("chips").innerHTML=list.map(s=>`<button type="button" class="chip${s===cur.q?" on":""}" data-s="${esc(s)}">${esc(s)}</button>`).join("");
 }
 function skeleton(q){
